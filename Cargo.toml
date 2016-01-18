@@ -1,0 +1,14 @@
+[package]
+name = "autocorrelation_window"
+version = "0.1.0"
+authors = ["Andrew Smith <andrewchristophersmith@gmail.com>"]
+
+[dependencies.vox_box]
+path = "../vox_box"
+
+[dependencies]
+piston = "0.17.0"
+piston_window = "0.32.0"
+piston2d-gfx_graphics = "0.16.0"
+piston2d-graphics = "0.13.1"
+portaudio = "0.6.2"
