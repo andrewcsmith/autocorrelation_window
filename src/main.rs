@@ -4,15 +4,21 @@ extern crate graphics;
 extern crate gfx_graphics;
 extern crate portaudio;
 extern crate vox_box;
+extern crate bounded_spsc_queue as spsc;
 
 use std::thread;
 use std::sync::{Arc, Mutex, TryLockError, LockResult, PoisonError};
 use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::ops::Deref;
 
 use piston::input::*;
-use piston::window::{Window as Win, AdvancedWindow, WindowSettings};
-use piston_window::{PistonWindow as Window};
+use piston::window::{Window, AdvancedWindow, WindowSettings};
+use piston_window::{PistonWindow};
+
+use spsc::{Producer, Consumer};
+
+use vox_box::Autocorrelates;
 
 const INTERLEAVED: bool = true;
 const LATENCY: portaudio::Time = 0.0;
@@ -20,58 +26,60 @@ const CHANNELS: i32 = 2;
 const FRAMES_PER_BUFFER: u32 = 64;
 const SAMPLE_RATE: f64 = 44100.0;
 
+const RING_BUFFER_SIZE: u32 = FRAMES_PER_BUFFER * 64;
+const AC_BUFFER_SIZE: u32 = FRAMES_PER_BUFFER * 16;
+const AUTO_COEFFS: usize = 64;
+
 fn main() {
-    let mut window: Window = WindowSettings::new("Hello Piston!", [640, 480])
+    let window: PistonWindow = WindowSettings::new("Hello Piston!", [640, 480])
         .exit_on_esc(true).fullscreen(true).samples(1).build().unwrap();
+    window.draw_2d(|c, g| piston_window::clear(graphics::color::WHITE, g));
 
     println!("Press x to stop.");
 
-    let mut samp = Arc::new(Mutex::new(vec![0.; FRAMES_PER_BUFFER as usize]));
+    let (producer, consumer) = spsc::make::<f64>(AUTO_COEFFS as usize);
     {
-        let samp = samp.clone();
-        thread::spawn(move || run(samp).unwrap());
+        thread::spawn(move || run(producer).unwrap());
     }
 
     for w in window {
-        w.draw_2d(|c, g| piston_window::clear(graphics::color::WHITE, g));
-        while let Some(e) = w.events.borrow_mut().next() {
-            match e {
-                Event::Input(i) => {
-                    match i {
-                        Input::Press(Button::Keyboard(keyboard::Key::X)) => {
-                            w.window.borrow_mut().set_should_close(true);
-                        },
-                        _ => {  }
+        match w.event {
+            Some(Event::Input(i)) => {
+                match i {
+                    Input::Press(Button::Keyboard(keyboard::Key::X)) => {
+                        w.window.borrow_mut().set_should_close(true);
+                    },
+                    _ => {  }
+                }
+            },
+            Some(Event::Render(RenderArgs { ext_dt, width, height, .. } )) => {
+                w.draw_2d(|c, g| {
+                    let mut shared_buf: [f64; AUTO_COEFFS] = [0.; AUTO_COEFFS];
+                    let mut index: usize = 0;
+                    while let Some(val) = consumer.try_pop() {
+                        shared_buf[index & (AUTO_COEFFS-1)] = val;
+                        index += 1;
                     }
-                },
-                Event::Render(RenderArgs { ext_dt, width, height, .. } ) => {
-                    w.draw_2d(|c, g| {
-                        piston_window::clear(graphics::color::WHITE, g);
-                        let guard = samp.lock().unwrap();
-                        let shared_buf = guard.deref();
-                        let length = shared_buf.len() as f64 - 1.;
-                        let dx = (1. / length) * width as f64;
-                        for (i, v) in shared_buf.windows(2).enumerate() {
-                            let x1 = i as f64 * dx;
-                            let x2 = x1 + dx;
-                            let y1 = (height as f64 * (v[0] + 1.)) / 2.;
-                            let y2 = (height as f64 * (v[1] + 1.)) / 2.;
-                            let line = piston_window::Line::new_round([0., 0., 0., 1.], 2.);
-                            let dims = [x1, y1, x2, y2];
-                            // println!("line: {:?}", dims);
-                            line.draw(dims, &c.draw_state, c.transform, g);
-                        }
-                        // let rectangle = piston_window::Rectangle::new([0.0; 4]);
-                        // rectangle.draw([500., 500., 100., 100.], &c.draw_state, c.transform, g);
-                    });
-                },
-                _ => {  }
-            }
+                    let length = shared_buf.len() as f64 - 1.;
+                    let dx = (1. / length) * width as f64;
+                    piston_window::clear(graphics::color::WHITE, g);
+                    for (i, v) in shared_buf.windows(2).enumerate() {
+                        let x1 = i as f64 * dx;
+                        let x2 = x1 + dx;
+                        let y1 = height as f64 - (height as f64 * (v[0] + 1.)) / 2.;
+                        let y2 = height as f64 - (height as f64 * (v[1] + 1.)) / 2.;
+                        let line = piston_window::Line::new_round([0., 0., 3., 1.], 1.);
+                        let dims = [x1, y1, x2, y2];
+                        line.draw(dims, &c.draw_state, c.transform, g);
+                    }
+                });
+            },
+            _ => {  }
         }
     }
 }
 
-fn run(val: Arc<Mutex<Vec<f64>>>) -> Result<(), portaudio::Error> {
+fn run(producer: Producer<f64>) -> Result<(), portaudio::Error> {
     let pa = try!(portaudio::PortAudio::new());
     println!("Found PortAudio version {}", pa.version());
     for device in pa.devices().unwrap() {
@@ -79,25 +87,27 @@ fn run(val: Arc<Mutex<Vec<f64>>>) -> Result<(), portaudio::Error> {
         println!("{}: {}", idx.0, info.name);
     }
 
+    let mut auto_buffer = VecDeque::<f32>::with_capacity(AC_BUFFER_SIZE as usize);
+
     let mut settings: portaudio::InputStreamSettings<f32> = try!(pa.default_input_stream_settings(CHANNELS, SAMPLE_RATE, FRAMES_PER_BUFFER));
     settings.flags = portaudio::stream_flags::CLIP_OFF;
 
     let callback = move |portaudio::InputStreamCallbackArgs { buffer, frames, .. }| {
-        match val.lock() {
-            Ok(mut shared_buf) => { 
-                for i in 0..shared_buf.len() {
-                    shared_buf[i] = buffer[i] as f64;
-                }
-            },
-            Err(err) => { 
-                println!("Mutex poisoned! {}", err);
-            }
+        // Make room in the autocorrelation buffer
+        while auto_buffer.capacity() < (auto_buffer.len() + frames) { auto_buffer.pop_front(); }
+        for i in 0..frames { auto_buffer.push_back(buffer[i]); }
+        let mut auto_coeffs: [f32; AUTO_COEFFS] = [0.; AUTO_COEFFS];
+        auto_buffer.autocorrelate_mut(AUTO_COEFFS, &mut auto_coeffs[..]);
+        auto_coeffs.normalize();
+
+        for val in auto_coeffs.iter() { 
+            producer.try_push(*val as f64);
         }
         portaudio::Continue
     };
 
     let mut stream = pa.open_non_blocking_stream(settings, callback).unwrap();
-    stream.start();
+    try!(stream.start());
 
     loop { }
 
