@@ -6,7 +6,7 @@ extern crate portaudio;
 extern crate vox_box;
 
 use std::thread;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, TryLockError, LockResult, PoisonError};
 use std::cell::{Cell, RefCell};
 use std::ops::Deref;
 
@@ -83,9 +83,15 @@ fn run(val: Arc<Mutex<Vec<f64>>>) -> Result<(), portaudio::Error> {
     settings.flags = portaudio::stream_flags::CLIP_OFF;
 
     let callback = move |portaudio::InputStreamCallbackArgs { buffer, frames, .. }| {
-        let mut shared_buf = val.lock().unwrap();
-        for i in 0..shared_buf.len() {
-            shared_buf[i] = buffer[i] as f64;
+        match val.lock() {
+            Ok(mut shared_buf) => { 
+                for i in 0..shared_buf.len() {
+                    shared_buf[i] = buffer[i] as f64;
+                }
+            },
+            Err(err) => { 
+                println!("Mutex poisoned! {}", err);
+            }
         }
         portaudio::Continue
     };
