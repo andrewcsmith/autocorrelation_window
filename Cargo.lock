@@ -4,11 +4,13 @@ version = "0.1.0"
 dependencies = [
  "bounded-spsc-queue 0.0.1 (git+https://github.com/andrewcsmith/bounded-spsc-queue.git)",
  "gfx_text 0.8.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "num 0.1.30 (registry+https://github.com/rust-lang/crates.io-index)",
  "piston 0.17.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "piston2d-gfx_graphics 0.18.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "piston2d-graphics 0.13.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "piston_window 0.34.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "portaudio 0.6.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustfft 1.0.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "vox_box 0.1.0",
 ]
 
@@ -648,6 +650,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 name = "rustc-serialize"
 version = "0.3.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "rustfft"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "num 0.1.30 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
 [[package]]
 name = "sample"

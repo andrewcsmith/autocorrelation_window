@@ -13,6 +13,8 @@ piston2d-gfx_graphics = "0.18.0"
 piston2d-graphics = "0.13.1"
 portaudio = "0.6.2"
 gfx_text = "0.8.0"
+rustfft = "1.0.1"
+num = "*"
 
 [dependencies.bounded-spsc-queue]
 git = "https://github.com/andrewcsmith/bounded-spsc-queue.git"
