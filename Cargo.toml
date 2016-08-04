@@ -4,8 +4,7 @@ version = "0.1.0"
 authors = ["Andrew Smith <andrewchristophersmith@gmail.com>"]
 
 [dependencies.vox_box]
-version = "0.2.0"
-path = "../vox_box"
+version = "0.2.1"
 
 [dependencies]
 piston = "*"
