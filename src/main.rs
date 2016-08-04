@@ -9,7 +9,7 @@ extern crate rustfft as fft;
 extern crate num;
 
 use std::thread;
-use std::sync::{Arc, Mutex, TryLockError, LockResult, PoisonError};
+use std::sync::{Arc, TryLockError, LockResult, PoisonError};
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::ops::Deref;
@@ -20,7 +20,8 @@ use piston_window::{PistonWindow};
 
 use spsc::{Producer, Consumer};
 
-use vox_box::Autocorrelates;
+use vox_box::periodic::Autocorrelate;
+use vox_box::waves::Normalize;
 
 const INTERLEAVED: bool = true;
 const LATENCY: portaudio::Time = 0.0;
@@ -32,11 +33,12 @@ const RING_BUFFER_SIZE: u32 = FRAMES_PER_BUFFER * 64;
 const AC_BUFFER_SIZE: u32 = FRAMES_PER_BUFFER * 16;
 const AUTO_COEFFS: usize = 64;
 const FFT_SIZE: usize = 256;
+const HALF_FFT_SIZE: usize = 256 / 2;
 
 fn main() {
-    let window: PistonWindow = WindowSettings::new("Hello Piston!", [640, 480])
+    let mut window: PistonWindow = WindowSettings::new("Hello Piston!", [640, 480])
         .exit_on_esc(true).fullscreen(true).samples(1).build().unwrap();
-    window.draw_2d(|c, g| piston_window::clear(graphics::color::WHITE, g));
+    // window.draw_2d(|c, g| piston_window::clear(graphics::color::WHITE, g));
 
     println!("Press x to stop.");
 
@@ -46,19 +48,19 @@ fn main() {
         thread::spawn(move || run(producer, fft_producer).unwrap());
     }
 
-    for w in window {
-        match w.event {
-            Some(Event::Input(i)) => {
+    while let Some(e) = window.next() {
+        match e {
+            Event::Input(i) => {
                 match i {
                     Input::Press(Button::Keyboard(keyboard::Key::X)) => {
-                        w.window.borrow_mut().set_should_close(true);
+                        window.set_should_close(true);
                     },
                     _ => {  }
                 }
             },
-            Some(Event::Render(RenderArgs { ext_dt, width, height, .. } )) => {
-                let mut shared_buf: [f64; AUTO_COEFFS] = [0.; AUTO_COEFFS];
-                let mut fft_buf: [f64; FFT_SIZE] = [0.; FFT_SIZE];
+            Event::Render(RenderArgs { ext_dt, width, height, .. } ) => {
+                let mut shared_buf = [0f64; AUTO_COEFFS];
+                let mut fft_buf = [0f64; FFT_SIZE];
 
                 // copies AUTO_COEFFS values to local array
                 let mut index: usize = 0;
@@ -74,7 +76,7 @@ fn main() {
                     index += 1;
                 }
 
-                w.draw_2d(|c, g| {
+                window.draw_2d(&e, |c, g| {
                     piston_window::clear(graphics::color::WHITE, g);
                     let mut length = shared_buf.len() as f64 - 1.;
                     let mut dx = (1. / length) * width as f64;
@@ -92,7 +94,7 @@ fn main() {
                     for (i, v) in fft_buf.iter().enumerate() {
                         let x1 = (i as f64 * dx) + dx / 2.;
                         let x2 = x1;
-                        let y1 = height as f64 - (height as f64 * (v + 1.)) / 2.;
+                        let y1 = height as f64 - (height as f64 * (v + 1.));
                         let y2 = height as f64;
                         let line = piston_window::Line::new_round([0., 3., 0., 0.5], dx / 4.);
                         let dims = [x1, y1, x2, y2];
@@ -103,6 +105,11 @@ fn main() {
             _ => {  }
         }
     }
+}
+
+struct Mel {
+    pow: f64,
+    mel: f64
 }
 
 fn run(producer: Producer<f64>, fft_producer: Producer<f64>) -> Result<(), portaudio::Error> {
@@ -116,6 +123,7 @@ fn run(producer: Producer<f64>, fft_producer: Producer<f64>) -> Result<(), porta
     let mut auto_buffer = VecDeque::<f32>::with_capacity(AC_BUFFER_SIZE as usize);
     let mut fft = fft::FFT::new(FFT_SIZE, false);
     let mut spectrum = vec![num::Complex { re: 0., im: 0.}; FFT_SIZE];
+    let mut cepstrum = spectrum.clone();
     let mut signal = spectrum.clone();
     let mut settings: portaudio::DuplexStreamSettings<f32, f32> = try!(pa.default_duplex_stream_settings(CHANNELS, CHANNELS, SAMPLE_RATE, FRAMES_PER_BUFFER));
     settings.flags = portaudio::stream_flags::CLIP_OFF;
@@ -126,15 +134,16 @@ fn run(producer: Producer<f64>, fft_producer: Producer<f64>) -> Result<(), porta
         for i in 0..frames { auto_buffer.push_back(in_buffer[i]); }
         for i in 0..frames { signal[i].re = in_buffer[i]; }
         let mut auto_coeffs: [f32; AUTO_COEFFS] = [0.; AUTO_COEFFS];
-        auto_buffer.autocorrelate_mut(AUTO_COEFFS, &mut auto_coeffs[..]);
+        auto_buffer.autocorrelate_mut(&mut auto_coeffs[..]);
         auto_coeffs.normalize();
         fft.process(&signal, &mut spectrum);
 
         for val in auto_coeffs.iter() { 
             producer.try_push(*val as f64);
         }
-        for val in spectrum.iter() {
-            fft_producer.try_push(val.re as f64);
+
+        for val in spectrum[0..((FFT_SIZE as f64 / 2.).floor() as usize)].iter() {
+            fft_producer.try_push(val.norm_sqr() as f64);
         }
 
         for i in 0..(frames * CHANNELS as usize) {

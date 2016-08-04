@@ -4,17 +4,17 @@ version = "0.1.0"
 authors = ["Andrew Smith <andrewchristophersmith@gmail.com>"]
 
 [dependencies.vox_box]
+version = "0.2.0"
 path = "../vox_box"
 
 [dependencies]
-piston = "0.17.0"
-piston_window = "0.34.0"
-piston2d-gfx_graphics = "0.18.0"
-piston2d-graphics = "0.13.1"
-portaudio = "0.6.2"
-gfx_text = "0.8.0"
-rustfft = "1.0.1"
+piston = "*"
+piston_window = "*"
+piston2d-gfx_graphics = "*"
+piston2d-graphics = "*"
+portaudio = "*"
+gfx_text = "*"
+rustfft = "*"
 num = "*"
+bounded-spsc-queue = "*"
 
-[dependencies.bounded-spsc-queue]
-git = "https://github.com/andrewcsmith/bounded-spsc-queue.git"
